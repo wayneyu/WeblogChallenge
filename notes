@@ -1,0 +1,17 @@
+Q: what does each of the values represent?
+A:
+
+Q: what data structure to transform to?
+A: We want to sessionize by IP, so map of IP address -> map of KV pairs for each value. similar to cassandra table
+
+Q: how to clean data?
+A: normalize data to minimize memory space by stripping out irrelevant fields.
+
+Q: Which fields to retain?
+A: For sessionization, we need IP and timestamp. To count unique URL visits per session, we also need to keep the HTTP request.
+
+Q: How to separate the values? Just a simple split(" ") won't work becasuse the http request contains spaces
+A: split by \" first and split second time by " " on remaining elements
+
+Q: What is the data structure?
+A: PairRDD (IP, (timestamp, request))
