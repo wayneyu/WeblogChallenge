@@ -1,6 +1,6 @@
 package org.wayneyu.weblogch
 
-import java.io.{File, PrintWriter}
+import java.io.PrintWriter
 
 import org.apache.spark.{SparkConf, SparkContext}
 import org.joda.time.DateTime
@@ -17,36 +17,86 @@ object Driver {
     val conf = new SparkConf().setAppName("org.wayneyu.weblogch").setMaster("local[4]")
     val sc = new SparkContext(conf)
 
-    val colToKeep = Array(0, 2, 11) // val headers = Array("timestamp", "ip", "request")
-    val sessionDurationMs = 5*60*1000
+    val colsToKeep = Array(0, 2, 11) // val headers = Array("timestamp", "ip", "request")
+    val timeResolutionMs = 10*1000 //time resolution in ms
+    val inActivityInMins = 30 //inactivity threshold in mins
+    val inActivityThres = inActivityInMins*60*1000/timeResolutionMs //inactivity threshold in unit of time resolution
 
+    // load file into memory
     val fileRDD = sc.textFile("data/2015_07_22_mktplace_shop_web_log_sample.log")
+
+    // Extraction begin ---------------------------------------------------------------------------------
+    // Split each line by \"\s and \s\" first and then split by \s
     val csvRDD = fileRDD.map( _.split("\"\\s|\\s\"")
                         .zipWithIndex.flatMap{ case (v, ind) => if (ind != 1) v.split(" ") else Array(v) } )
+
+    // Add column index to each value for each line, so that we can filter by column index later on
     val indexedRDD = csvRDD.map( _.zipWithIndex.map(_.swap))
-    val filteredRDD = indexedRDD.map( m => m.filter( kv => colToKeep.contains(kv._1)).map( _._2 ) )
+
+    // Filter out irrelevant columns by keeping values with column index that we want to keep. Then remove the column indices
+    // After this tranformation, the RDD is a collection of Array[String] where each array stores [timeString, ip, url]
+    val filteredRDD = indexedRDD.map( m => m.filter( kv => colsToKeep.contains(kv._1)).map( _._2 ) )
+
+    // Transformation begin ---------------------------------------------------------------------------------
+    // Transform to a PairRDD datastructure, where each pair is (ip, (timeString, url))
     val keyedByIpRDD = filteredRDD.map( arr => (arr(1), List((arr(0),arr(2))))).reduceByKey( (a,b) => a:::b )
-                                  .map{ case (ip, timeAndReqs) => (ip, timeAndReqs.sortBy( _._1 )) }
-    keyedByIpRDD.cache()
 
-    val sessionRDD = keyedByIpRDD.map{
+    // Convert datetime string to timestamp and discretize timestamp by timeResolution
+    // After this transformation, the data structure will be a PairRDD where each row is
+    // (ip, List of tuple of (time, Set of urls) )
+    // or
+    // (ip, [(time1, List(url1, url2)), (time1, List(url1, url2)),... ], ...)
+    val ipToTimeToUrlRDD = keyedByIpRDD.map{
       case (ip, timeAndReqs) => (ip, timeAndReqs.map{
-          case (timestr, req) => (DateTime.parse(timestr).getMillis/sessionDurationMs, req)}.groupBy(_._1).map{
-            case (session, sessionAndurls) => (session, sessionAndurls.map(_._2).toSet) }
-          ) }
+        case (timestr, req) => (DateTime.parse(timestr).getMillis/timeResolutionMs, req)})
+    }
 
-    val averageSessionMinsPerUserRDD = sessionRDD.map{ case (ip, sessionToUrls) =>
-      (ip, avLengthConsecSeq(sessionToUrls.keys.toArray.sorted.toList)*sessionDurationMs/1000/60) }
 
-    val averageSessionMins = averageSessionMinsPerUserRDD.map(_._2).mean().toInt
+    // Analytics begin ---------------------------------------------------
+    // Group unique urls within same timeResolution together
+    val groupByTimeResRDD = ipToTimeToUrlRDD.map{
+      case (ip, timeAndUrls) => (ip, timeAndUrls.groupBy(_._1).toArray.sortBy(_._1).map{
+            case (session, sessionAndUrls) => (session, sessionAndUrls.map(_._2).toSet) }
+          )}
 
-    sessionRDD.saveAsTextFile("data/res/sessionized_urls")
-    averageSessionMinsPerUserRDD.saveAsTextFile("data/res/av_session_time")
-    writeToFile("data/res/av_session_time/global_av", averageSessionMins.toString)
+    // Cache the final form of the data for following analytics
+    groupByTimeResRDD.cache()
+
+    // Sessionize by using an inactivity threshold (sessionTimeoutMs)
+    val groupBySessionRDD = groupByTimeResRDD.map {
+      case (ip, timeAndUrls) => (ip, sessionize(timeAndUrls.unzip._1.toList, inActivityThres).zip(timeAndUrls.unzip._2).groupBy(_._1))
+    }
+
+    val averageSessionSecsPerUserRDD = groupByTimeResRDD.map{ case (ip, timeToUrls) =>
+      (ip, average(sessionLengths(timeToUrls.unzip._1.toList, inActivityThres))*timeResolutionMs/1000) }
+
+    val averageSessionSecs = groupByTimeResRDD.flatMap{ case (ip, timeToUrls) =>
+      sessionLengths(timeToUrls.unzip._1.toList, inActivityThres)}.mean()*timeResolutionMs/1000
+
+    val longestSessionSecsPerUserRDD = groupByTimeResRDD.map{ case (ip, timeToUrls) =>
+      (ip, sessionLengths(timeToUrls.unzip._1.toList, inActivityThres).max*timeResolutionMs/1000) }.sortBy(_._2, ascending = false)
+
+    groupBySessionRDD.saveAsTextFile("data/res/sessionized_urls")
+    averageSessionSecsPerUserRDD.saveAsTextFile("data/res/user_av_session_time")
+    longestSessionSecsPerUserRDD.saveAsTextFile("data/res/user_max_session_time")
+    writeToFile("data/res/av_session_time", averageSessionSecs.toString)
   }
 
-  def diff(l: List[Long]): List[Long] = (0L::l).take(l.length).zip(l).map( p => p._2 - p._1)
+  def diff(l: List[Long]): List[Long] = (l.head::l).take(l.length).zip(l).map( p => p._2 - p._1)
+
   def average(l: List[Long]): Long = (l.sum/l.length.toDouble + 1).toLong
+  def average(l: List[Int]): Int = (l.sum/l.length.toDouble + 1).toInt
+
+  def sessionize(ts: List[Long], thres: Long): List[Int] = {
+    var session_id = 0
+    for (t <- diff(ts)) yield {
+      if (t > thres) session_id += 1
+      session_id
+    }
+  }
+
+  def sessionLengths(ts: List[Long], thres: Long): List[Int] = sessionize(ts, thres).groupBy(identity).map(_._2.length).toList
+
   def avLengthConsecSeq(l: List[Long]): Int = {
     val res = diff(0L::l).zipWithIndex.filter(_._1 != 1).map(_._2)
     average(diff(res.map(_.toLong))).toInt

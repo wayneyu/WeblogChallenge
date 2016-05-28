@@ -15,3 +15,6 @@ A: split by \" first and split second time by " " on remaining elements
 
 Q: What is the data structure?
 A: PairRDD (IP, (timestamp, request))
+
+Q: How to define a session?
+A: Check if consecutive visit is longer than an inactivity time

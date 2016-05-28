@@ -1,11 +1,11 @@
-name := """twmapper"""
+name := """weblogchallenge"""
 
 version := "1.0"
 
-scalaVersion := "2.11.7"
+scalaVersion := "2.10.6"
 
 // Change this to another test framework if you prefer
-libraryDependencies += "org.scalatest" % "scalatest_2.11" % "2.2.6" % "test"
+libraryDependencies += "org.scalatest" % "scalatest_2.10" % "2.2.6" % "test"
 
 libraryDependencies += "org.apache.spark" % "spark-core_2.10" % "1.6.1"
 
