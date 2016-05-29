@@ -18,3 +18,6 @@ A: PairRDD (IP, (timestamp, request))
 
 Q: How to define a session?
 A: Check if consecutive visit is longer than an inactivity time
+
+Q: How to deal with IPs that only have one data point? How should session time, which needs need start time and end time, be calculated? Drop these points?
+A:

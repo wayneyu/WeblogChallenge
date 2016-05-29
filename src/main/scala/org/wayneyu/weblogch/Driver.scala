@@ -18,7 +18,7 @@ object Driver {
     val sc = new SparkContext(conf)
 
     val colsToKeep = Array(0, 2, 11) // val headers = Array("timestamp", "ip", "request")
-    val timeResolutionMs = 10*1000 //time resolution in ms
+    val timeResolutionMs = 5*1000 //time resolution in ms
     val inActivityInMins = 30 //inactivity threshold in mins
     val inActivityThres = inActivityInMins*60*1000/timeResolutionMs //inactivity threshold in unit of time resolution
 
@@ -71,21 +71,22 @@ object Driver {
       (ip, average(sessionLengths(timeToUrls.unzip._1.toList, inActivityThres))*timeResolutionMs/1000) }
 
     val averageSessionSecs = groupByTimeResRDD.flatMap{ case (ip, timeToUrls) =>
-      sessionLengths(timeToUrls.unzip._1.toList, inActivityThres)}.mean()*timeResolutionMs/1000
+      sessionLengths(timeToUrls.unzip._1.toList, inActivityThres).filter(_!=0).map(_*timeResolutionMs/1000)}.mean()
 
     val longestSessionSecsPerUserRDD = groupByTimeResRDD.map{ case (ip, timeToUrls) =>
       (ip, sessionLengths(timeToUrls.unzip._1.toList, inActivityThres).max*timeResolutionMs/1000) }.sortBy(_._2, ascending = false)
 
-    groupBySessionRDD.saveAsTextFile("data/res/sessionized_urls")
-    averageSessionSecsPerUserRDD.saveAsTextFile("data/res/user_av_session_time")
-    longestSessionSecsPerUserRDD.saveAsTextFile("data/res/user_max_session_time")
-    writeToFile("data/res/av_session_time", averageSessionSecs.toString)
+    val resFolder = "data/res/"
+    groupBySessionRDD.saveAsTextFile(resFolder + "sessionized_urls")
+    averageSessionSecsPerUserRDD.saveAsTextFile(resFolder + "user_av_session_time")
+    longestSessionSecsPerUserRDD.saveAsTextFile(resFolder + "user_max_session_time")
+    writeToFile(resFolder + "av_session_time", averageSessionSecs.toString)
   }
 
-  def diff(l: List[Long]): List[Long] = (l.head::l).take(l.length).zip(l).map( p => p._2 - p._1)
+  def diff(l: List[Long]): List[Long] = (l.head::l).zip(l).map(p => p._2 - p._1)
 
-  def average(l: List[Long]): Long = (l.sum/l.length.toDouble + 1).toLong
-  def average(l: List[Int]): Int = (l.sum/l.length.toDouble + 1).toInt
+  def average(l: List[Long]): Long = l.sum/l.length
+  def average(l: List[Int]): Int = l.sum/l.length
 
   def sessionize(ts: List[Long], thres: Long): List[Int] = {
     var session_id = 0
@@ -95,7 +96,8 @@ object Driver {
     }
   }
 
-  def sessionLengths(ts: List[Long], thres: Long): List[Int] = sessionize(ts, thres).groupBy(identity).map(_._2.length).toList
+  def sessionLengths(ts: List[Long], thres: Long): List[Int] =
+    sessionize(ts, 10).zip(ts).groupBy(_._1).toList.map{ case (ind, sessionTs) => diff(sessionTs.unzip._2).sum.toInt }
 
   def avLengthConsecSeq(l: List[Long]): Int = {
     val res = diff(0L::l).zipWithIndex.filter(_._1 != 1).map(_._2)
