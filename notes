@@ -1,5 +1,5 @@
 Q: what does each of the values represent?
-A:
+A: col0:timestamp, col2: ip, col11 http request url
 
 Q: what data structure to transform to?
 A: We want to sessionize by IP, so map of IP address -> map of KV pairs for each value. similar to cassandra table
@@ -19,5 +19,8 @@ A: PairRDD (IP, (timestamp, request))
 Q: How to define a session?
 A: Check if consecutive visit is longer than an inactivity time
 
-Q: How to deal with IPs that only have one data point? How should session time, which needs need start time and end time, be calculated? Drop these points?
-A:
+Q: How to deal with IPs that only have one data point? How should session time, which needs start time and end time, be calculated? Drop these points?
+A: Ignore the single data points when calculating session times
+
+Q: How to ensure result is correct?
+A: Compare result for different time resolution
