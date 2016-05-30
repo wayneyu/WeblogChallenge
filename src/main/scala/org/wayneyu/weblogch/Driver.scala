@@ -66,7 +66,8 @@ object Driver {
 
     // Sessionize by inactivity threshold (sessionTimeoutMs)
     val groupBySessionRDD = groupByTimeResRDD.map {
-      case (ip, timeAndUrls) => (ip, sessionize(timeAndUrls.unzip._1.toList, inActivityThres).zip(timeAndUrls.unzip._2).groupBy(_._1))
+      case (ip, timeAndUrls) => (ip, sessionize(timeAndUrls.unzip._1.toList, inActivityThres).zip(timeAndUrls.unzip._2).groupBy(_._1)
+        .map{ case (sessionId, sessionIdAndUrls) => (sessionId, sessionIdAndUrls.flatMap(_._2).toSet) })
     }
 
     // Find session lengths for each user and cache the result for later session calculations
